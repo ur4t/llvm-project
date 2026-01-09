@@ -379,7 +379,7 @@ public:
       VerDefIndex = DynTab.Content.addAddr(DT_VERDEF, 0);
     DynTab.Size = DynTab.Content.getSize();
     // Calculate sections' addresses and offsets.
-    uint64_t CurrentOffset = sizeof(Elf_Ehdr);
+    uint64_t CurrentOffset = sizeof(Elf_Ehdr) + ElfPhnum * sizeof(Elf_Phdr);
     for (OutputSection<ELFT> *Sec : Sections) {
       Sec->Offset = alignTo(CurrentOffset, Sec->Align);
       Sec->Addr = Sec->Offset;
@@ -406,8 +406,28 @@ public:
     initELFHeader<ELFT>(ElfHeader, static_cast<uint16_t>(*Stub.Target.Arch));
     ElfHeader.e_shstrndx = ShStrTab.Index;
     ElfHeader.e_shnum = LastSection->Index + 1;
+    ElfHeader.e_phnum = ElfPhnum;
+    ElfHeader.e_phoff = sizeof(Elf_Ehdr);
     ElfHeader.e_shoff =
         alignTo(LastSection->Offset + LastSection->Size, sizeof(Elf_Addr));
+
+    ElfProgramHeaders[0].p_type = PT_LOAD;
+    ElfProgramHeaders[0].p_offset = 0;
+    ElfProgramHeaders[0].p_vaddr = 0;
+    ElfProgramHeaders[0].p_paddr = 0;
+    ElfProgramHeaders[0].p_filesz = DynTab.Shdr.sh_offset;
+    ElfProgramHeaders[0].p_memsz = DynTab.Shdr.sh_offset;
+    ElfProgramHeaders[0].p_flags = PF_R;
+    ElfProgramHeaders[0].p_align = 0x1000;
+
+    ElfProgramHeaders[1].p_type = PT_DYNAMIC;
+    ElfProgramHeaders[1].p_offset = DynTab.Shdr.sh_offset;
+    ElfProgramHeaders[1].p_vaddr = DynTab.Shdr.sh_offset;
+    ElfProgramHeaders[1].p_paddr = DynTab.Shdr.sh_offset;
+    ElfProgramHeaders[1].p_filesz = DynTab.Shdr.sh_size;
+    ElfProgramHeaders[1].p_memsz = DynTab.Shdr.sh_size;
+    ElfProgramHeaders[1].p_flags = PF_R | PF_W;
+    ElfProgramHeaders[1].p_align = DynTab.Shdr.sh_addralign;
 
     return Error::success();
   }
@@ -418,6 +438,9 @@ public:
 
   void write(uint8_t *Data) const {
     write(Data, ElfHeader);
+    for (size_t I = 0; I < ElfPhnum; I++)
+      write(Data + ElfHeader.e_phoff + I * sizeof(Elf_Phdr),
+            ElfProgramHeaders[I]);
     DynSym.Content.write(Data + DynSym.Shdr.sh_offset);
     DynStr.Content.write(Data + DynStr.Shdr.sh_offset);
     DynTab.Content.write(Data + DynTab.Shdr.sh_offset);
@@ -438,6 +461,8 @@ public:
 
 private:
   Elf_Ehdr ElfHeader;
+  static constexpr auto ElfPhnum = 2;
+  Elf_Phdr ElfProgramHeaders[ElfPhnum];
   ContentSection<ELFStringTableBuilder, ELFT> DynStr;
   ContentSection<ELFStringTableBuilder, ELFT> ShStrTab;
   ContentSection<ELFSymbolTableBuilder<ELFT>, ELFT> DynSym;
