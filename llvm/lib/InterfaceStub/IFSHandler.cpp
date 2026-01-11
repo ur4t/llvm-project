@@ -48,6 +48,7 @@ template <> struct ScalarEnumerationTraits<IFSSymbolType> {
   static void enumeration(IO &IO, IFSSymbolType &SymbolType) {
     IO.enumCase(SymbolType, "NoType", IFSSymbolType::NoType);
     IO.enumCase(SymbolType, "Func", IFSSymbolType::Func);
+    IO.enumCase(SymbolType, "IFunc", IFSSymbolType::IFunc);
     IO.enumCase(SymbolType, "Object", IFSSymbolType::Object);
     IO.enumCase(SymbolType, "TLS", IFSSymbolType::TLS);
     IO.enumCase(SymbolType, "Unknown", IFSSymbolType::Unknown);
@@ -139,7 +140,8 @@ template <> struct MappingTraits<IFSSymbol> {
       // should emit it.
       if (!Symbol.Size || *Symbol.Size)
         IO.mapOptional("Size", Symbol.Size);
-    } else if (Symbol.Type != IFSSymbolType::Func) {
+    } else if (Symbol.Type != IFSSymbolType::Func &&
+               Symbol.Type != IFSSymbolType::IFunc) {
       IO.mapOptional("Size", Symbol.Size);
     }
     IO.mapOptional("Default", Symbol.Default, false);

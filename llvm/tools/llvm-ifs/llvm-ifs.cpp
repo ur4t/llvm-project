@@ -122,6 +122,8 @@ static std::string getTypeName(IFSSymbolType Type) {
     return "Object";
   case IFSSymbolType::TLS:
     return "TLS";
+  case IFSSymbolType::IFunc:
+    return "IFunc";
   case IFSSymbolType::Unknown:
     return "Unknown";
   }
@@ -223,6 +225,9 @@ static int writeTbdStub(const Triple &T, const std::vector<IFSSymbol> &Symbols,
       Kind = EncodeKind::GlobalSymbol;
       break;
     case IFSSymbolType::Func:
+      Kind = EncodeKind::GlobalSymbol;
+      break;
+    case IFSSymbolType::IFunc:
       Kind = EncodeKind::GlobalSymbol;
       break;
     }

@@ -93,6 +93,8 @@ uint8_t ifs::convertIFSSymbolTypeToELF(IFSSymbolType SymbolType) {
     return ELF::STT_FUNC;
   case IFSSymbolType::TLS:
     return ELF::STT_TLS;
+  case IFSSymbolType::IFunc:
+    return ELF::STT_GNU_IFUNC;
   case IFSSymbolType::NoType:
     return ELF::STT_NOTYPE;
   default:
@@ -131,6 +133,8 @@ IFSSymbolType ifs::convertELFSymbolTypeToIFS(uint8_t SymbolType) {
     return IFSSymbolType::Func;
   case ELF::STT_TLS:
     return IFSSymbolType::TLS;
+  case ELF::STT_GNU_IFUNC:
+    return IFSSymbolType::IFunc;
   case ELF::STT_NOTYPE:
     return IFSSymbolType::NoType;
   default:

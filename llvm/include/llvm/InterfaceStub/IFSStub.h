@@ -29,6 +29,7 @@ enum class IFSSymbolType {
   Object,
   Func,
   TLS,
+  IFunc,
 
   // Type information is 4 bits, so 16 is safely out of range.
   Unknown = 16,

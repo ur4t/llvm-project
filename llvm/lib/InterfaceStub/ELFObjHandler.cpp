@@ -746,7 +746,8 @@ static IFSSymbol createELFSym(StringRef SymName, StringRef SymVer, bool Default,
   TargetSym.Undefined = RawSym.isUndefined();
   TargetSym.Type = convertELFSymbolTypeToIFS(RawSym.st_info);
 
-  if (TargetSym.Type == IFSSymbolType::Func) {
+  if (TargetSym.Type == IFSSymbolType::Func ||
+      TargetSym.Type == IFSSymbolType::IFunc) {
     TargetSym.Size = 0;
   } else {
     TargetSym.Size = RawSym.st_size;
