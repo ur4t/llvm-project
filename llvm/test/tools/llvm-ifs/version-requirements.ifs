@@ -1,0 +1,41 @@
+# RUN: llvm-ifs --input-format=IFS --output-ifs - %s | \
+# RUN: FileCheck %s --check-prefixes=CHECK-IFS
+
+# RUN: llvm-ifs --input-format=IFS --output-elf - %s | \
+# RUN: llvm-readelf --all - | FileCheck %s --check-prefixes=CHECK-ELF
+
+# CHECK-IFS: --- !ifs-v1
+# CHECK-IFS-NEXT: IfsVersion: 3.0
+# CHECK-IFS-NEXT: SoName: libfoo.so
+# CHECK-IFS-NEXT: Target:          x86_64-unknown-linux-gnu
+# CHECK-IFS-NEXT: NeededLibs:
+# CHECK-IFS-NEXT:   - libbar.so
+# CHECK-IFS-NEXT: Symbols:
+# CHECK-IFS-NEXT:   - { Name: func, Version: VER_F, VersionFrom: libbar.so, Type: Func, Undefined: true }
+# CHECK-IFS-NEXT:   - { Name: obj, Version: VER_O, VersionFrom: libbar.so, Type: Object, Size: 0, Undefined: true }
+# CHECK-IFS-NEXT: VersionRequirements:
+# CHECK-IFS-NEXT:   - { File: libbar.so, Names: [ VER_F, VER_O ] }
+# CHECK-IFS-NEXT: ...
+
+# CHECK-ELF: FUNC    GLOBAL DEFAULT UND func@VER_F
+# CHECK-ELF: OBJECT  GLOBAL DEFAULT UND obj@VER_O
+
+# CHECK-ELF: Version: 1  File: libbar.so  Cnt: 2
+# CHECK-ELF:   Name: VER_F  Flags: none  Version: 2
+# CHECK-ELF:   Name: VER_O  Flags: none  Version: 3
+
+--- !ifs-v1
+IfsVersion: 3.0
+SoName: libfoo.so
+Target: x86_64-unknown-linux-gnu
+NeededLibs:
+  - libbar.so
+Symbols:
+  - { Name: obj, Version: VER_O, VersionFrom: libbar.so, Type: Object, Size: 0, Undefined: true }
+  - { Name: func, Version: VER_F, VersionFrom: libbar.so, Type: Func, Undefined: true }
+VersionDefinitions:
+  - { Name: libfoo.so }
+VersionRequirements:
+  - { File: libbar.so, Names: [ VER_O ] }
+  - { File: libbar.so, Names: [ VER_F ] }
+...
