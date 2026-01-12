@@ -25,6 +25,7 @@ using namespace llvm::ifs;
 
 LLVM_YAML_IS_SEQUENCE_VECTOR(IFSSymbol)
 LLVM_YAML_IS_SEQUENCE_VECTOR(IFSVerDef)
+LLVM_YAML_IS_SEQUENCE_VECTOR(IFSVerNeed)
 LLVM_YAML_STRONG_TYPEDEF(std::string, FlowString)
 LLVM_YAML_IS_FLOW_SEQUENCE_VECTOR(FlowString)
 
@@ -133,6 +134,7 @@ template <> struct MappingTraits<IFSSymbol> {
   static void mapping(IO &IO, IFSSymbol &Symbol) {
     IO.mapRequired("Name", Symbol.Name);
     IO.mapOptional("Version", Symbol.Version, "");
+    IO.mapOptional("VersionFrom", Symbol.VersionFrom, "");
     IO.mapRequired("Type", Symbol.Type);
     // The need for symbol size depends on the symbol type.
     if (Symbol.Type == IFSSymbolType::NoType) {
@@ -171,6 +173,23 @@ template <> struct MappingTraits<IFSVerDef> {
   static const bool flow = true; // NOLINT(readability-identifier-naming)
 };
 
+/// YAML traits for ELFVersionRequirements.
+template <> struct MappingTraits<IFSVerNeed> {
+  static void mapping(IO &IO, IFSVerNeed &VerNeed) {
+    IO.mapRequired("File", VerNeed.File);
+    if (IO.outputting()) {
+      std::vector<FlowString> Names;
+      llvm::copy(VerNeed.Names, std::back_inserter(Names));
+      IO.mapOptional("Names", Names);
+    } else {
+      IO.mapOptional("Names", VerNeed.Names);
+    }
+  }
+
+  // Compacts symbol information into a single line.
+  static const bool flow = true; // NOLINT(readability-identifier-naming)
+};
+
 /// YAML traits for ELFStub objects.
 template <> struct MappingTraits<IFSStub> {
   static void mapping(IO &IO, IFSStub &Stub) {
@@ -182,6 +201,7 @@ template <> struct MappingTraits<IFSStub> {
     IO.mapOptional("NeededLibs", Stub.NeededLibs);
     IO.mapRequired("Symbols", Stub.Symbols);
     IO.mapOptional("VersionDefinitions", Stub.VersionDefinitions);
+    IO.mapOptional("VersionRequirements", Stub.VersionRequirements);
   }
 };
 
@@ -196,6 +216,7 @@ template <> struct MappingTraits<IFSStubTriple> {
     IO.mapOptional("NeededLibs", Stub.NeededLibs);
     IO.mapRequired("Symbols", Stub.Symbols);
     IO.mapOptional("VersionDefinitions", Stub.VersionDefinitions);
+    IO.mapOptional("VersionRequirements", Stub.VersionRequirements);
   }
 };
 } // end namespace yaml

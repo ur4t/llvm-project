@@ -399,6 +399,7 @@ int llvm_ifs_main(int argc, char **argv, const llvm::ToolContext &) {
   IFSStub Stub;
   std::map<std::tuple<std::string, std::string>, IFSSymbol> SymbolMap;
   std::map<std::string, std::set<std::string>> VersionDefinitionMap;
+  std::map<std::string, std::set<std::string>> VersionRequirementMap;
   std::string PreviousInputFilePath;
   for (const std::string &InputFilePath : Config.InputFilePaths) {
     Expected<std::unique_ptr<IFSStub>> StubOrErr =
@@ -451,6 +452,12 @@ int llvm_ifs_main(int argc, char **argv, const llvm::ToolContext &) {
                            << InputFilePath << "\n";
         return -1;
       }
+      if (Stub.VersionRequirements != TargetStub->VersionRequirements) {
+        WithColor::error() << "Interface Stub: VersionRequirements Mismatch."
+                           << "\nFilenames: " << PreviousInputFilePath << " "
+                           << InputFilePath << "\n";
+        return -1;
+      }
     }
 
     for (auto Symbol : TargetStub->Symbols) {
@@ -493,6 +500,12 @@ int llvm_ifs_main(int argc, char **argv, const llvm::ToolContext &) {
       llvm::copy(Parents, std::inserter(Value, Value.end()));
     }
 
+    for (const auto &[File, Names] : TargetStub->VersionRequirements) {
+      auto [Iter, Inserted] = VersionRequirementMap.insert({File, {}});
+      auto &[Key, Value] = *Iter;
+      llvm::copy(Names, std::inserter(Value, Value.end()));
+    }
+
     PreviousInputFilePath = InputFilePath;
   }
 
@@ -511,6 +524,12 @@ int llvm_ifs_main(int argc, char **argv, const llvm::ToolContext &) {
     std::vector<std::string> Parents;
     llvm::copy(ParentSet, std::back_inserter(Parents));
     Stub.VersionDefinitions.push_back({Name, std::move(Parents)});
+  }
+
+  for (const auto &[File, NameSet] : VersionRequirementMap) {
+    std::vector<std::string> Names;
+    llvm::copy(NameSet, std::back_inserter(Names));
+    Stub.VersionRequirements.push_back({File, std::move(Names)});
   }
 
   // Change SoName before emitting stubs.

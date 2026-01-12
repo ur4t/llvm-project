@@ -56,6 +56,7 @@ struct IFSSymbol {
   explicit IFSSymbol(const std::string &Name) : Name(Name) {}
   std::string Name;
   std::string Version;
+  std::string VersionFrom;
   std::optional<uint64_t> Size;
   IFSSymbolType Type = IFSSymbolType::NoType;
   bool Default = false;
@@ -75,6 +76,16 @@ struct IFSVerDef {
     return std::tie(Name, Parents) == std::tie(Other.Name, Other.Parents);
   }
   bool operator!=(const IFSVerDef &Other) const { return !(*this == Other); }
+};
+
+struct IFSVerNeed {
+  std::string File;
+  std::vector<std::string> Names;
+
+  bool operator==(const IFSVerNeed &Other) const {
+    return std::tie(File, Names) == std::tie(Other.File, Other.Names);
+  }
+  bool operator!=(const IFSVerNeed &Other) const { return !(*this == Other); }
 };
 
 struct IFSTarget {
@@ -105,6 +116,7 @@ struct IFSStub {
   std::vector<std::string> NeededLibs;
   std::vector<IFSSymbol> Symbols;
   std::vector<IFSVerDef> VersionDefinitions;
+  std::vector<IFSVerNeed> VersionRequirements;
 
   IFSStub() = default;
   LLVM_ABI IFSStub(const IFSStub &Stub);

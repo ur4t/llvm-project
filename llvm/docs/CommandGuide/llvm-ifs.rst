@@ -43,6 +43,8 @@ by the :program:`llvm-ifs`:
     - { Name: sym5, Version: VER_1, Type: Func }
   VersionDefinitions: /* Optional */
     - { Name: VER_1 }
+  VersionRequirements: /* Optional */
+    - { File: libc.so.6, Names: [ GLIBC_2.14, GLIBC_2.4, GLIBC_2.2.5, GLIBC_2.3.4 ] }
   ...
 
 * ``IFSVersion``: Version of the IFS file for reader compatibility.
@@ -76,6 +78,8 @@ by the :program:`llvm-ifs`:
 
 * ``VersionDefinitions`` (optional): A collection of symbol versions defined in this shared object file.
 
+* ``VersionRequirements`` (optional): A collection of symbol versions defined in external shared objects that this library depends on.
+
 This YAML based text format contains everything that is needed to generate a
 linkable ELF shared object as well as an Apple TAPI format file. The ordering
 of symbols is sorted, so these files can be easily compared using diff tools.
@@ -100,6 +104,8 @@ A minimum ELF file that can be used by linker should have following sections pro
 
 * Version definition table (``.gnu.version_d`` section). (optional)
 
+* Version requirement table (``.gnu.version_r`` section). (optional)
+
 * Dynamic table (``.dynamic`` section).
 
   + ``DT_SYMTAB`` entry.
@@ -115,6 +121,8 @@ A minimum ELF file that can be used by linker should have following sections pro
   + ``DT_VERSYM`` entry. (optional)
 
   + ``DT_VERDEF`` entry. (optional)
+
+  + ``DT_VERNEED`` entry. (optional)
 
 * Section header string table (``.shstrtab`` section)
 

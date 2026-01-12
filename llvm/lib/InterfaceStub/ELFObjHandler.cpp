@@ -43,6 +43,8 @@ struct DynamicEntries {
   std::optional<uint64_t> VerSym;
   std::optional<uint64_t> VerDef;
   std::optional<uint64_t> VerDefNum;
+  std::optional<uint64_t> VerNeed;
+  std::optional<uint64_t> VerNeedNum;
 };
 
 /// This initializes an ELF file header with information specific to a binary
@@ -210,6 +212,66 @@ private:
   llvm::SmallVector<llvm::SmallVector<Elf_Verdaux, 8>, 8> VerDAuxes;
 };
 
+template <class ELFT> class ELFVersionRequirementBuilder {
+public:
+  using Elf_Verneed = typename ELFT::Verneed;
+  using Elf_Vernaux = typename ELFT::Vernaux;
+
+  void addFile(uint16_t Count, uint32_t File) {
+    Elf_Verneed VerNeed;
+    VerNeed.vn_version = VER_NEED_CURRENT;
+    VerNeed.vn_cnt = Count;
+    VerNeed.vn_file = File;
+    VerNeed.vn_aux = sizeof(Elf_Verneed);
+    VerNeed.vn_next = sizeof(Elf_Verneed) + Count * sizeof(Elf_Vernaux);
+    VerNeeds.push_back(VerNeed);
+    VerNAuxes.push_back({});
+  }
+
+  void addAux(uint16_t Vnndx, uint32_t Hash, uint16_t Vdndx, uint32_t Name) {
+    Elf_Vernaux VerNAux;
+    VerNAux.vna_hash = Hash;
+    VerNAux.vna_flags = 0;
+    VerNAux.vna_other = Vdndx;
+    VerNAux.vna_name = Name;
+    VerNAux.vna_next = sizeof(Elf_Vernaux);
+    VerNAuxes[Vnndx].push_back(VerNAux);
+  }
+
+  void finalize() {
+    if (!VerNeeds.empty())
+      VerNeeds.back().vn_next = 0;
+    for (llvm::SmallVector<Elf_Vernaux, 8> &VerNAux : VerNAuxes)
+      if (!VerNAux.empty())
+        VerNAux.back().vna_next = 0;
+  }
+
+  size_t getSize() const {
+    size_t Count = 0;
+    for (const llvm::SmallVector<Elf_Vernaux, 8> &VerNAux : VerNAuxes)
+      Count += VerNAux.size();
+    return Count * sizeof(Elf_Vernaux) + VerNeeds.size() * sizeof(Elf_Verneed);
+  }
+
+  void write(uint8_t *Buf) const {
+    uint8_t *Ptr = Buf;
+    size_t Count = 0;
+    size_t Vnndx = 0;
+    for (const Elf_Verneed &VerNeed : VerNeeds) {
+      Count = sizeof(Elf_Verneed);
+      memcpy(Ptr, &VerNeed, Count);
+      Ptr += Count;
+      Count = VerNeed.vn_cnt * sizeof(Elf_Vernaux);
+      memcpy(Ptr, VerNAuxes[Vnndx].data(), Count);
+      Ptr += Count;
+    }
+  }
+
+private:
+  llvm::SmallVector<Elf_Verneed, 8> VerNeeds;
+  llvm::SmallVector<llvm::SmallVector<Elf_Vernaux, 8>, 8> VerNAuxes;
+};
+
 template <class ELFT> class ELFDynamicTableBuilder {
 public:
   using Elf_Dyn = typename ELFT::Dyn;
@@ -279,12 +341,17 @@ public:
     VerSym.Align = 2;
     VerDef.Name = ".gnu.version_d";
     VerDef.Align = sizeof(Elf_Addr);
+    VerNeed.Name = ".gnu.version_r";
+    VerNeed.Align = sizeof(Elf_Addr);
 
     // Populate string tables.
     for (const IFSSymbol &Sym : Stub.Symbols)
       DynStr.Content.add(Sym.Name);
     for (const IFSVerDef &VerDef : Stub.VersionDefinitions)
       DynStr.Content.add(VerDef.Name);
+    for (const IFSVerNeed &VerNeed : Stub.VersionRequirements)
+      for (const std::string &VerNeedName : VerNeed.Names)
+        DynStr.Content.add(VerNeedName);
     for (const std::string &Lib : Stub.NeededLibs)
       DynStr.Content.add(Lib);
     if (Stub.SoName)
@@ -294,6 +361,7 @@ public:
       return !Sym.Version.empty();
     });
     WriteVerDef = !Stub.VersionDefinitions.empty();
+    WriteVerNeed = !Stub.VersionRequirements.empty();
 
     std::vector<OutputSection<ELFT> *> Sections;
     Sections.push_back(&DynSym);
@@ -302,6 +370,8 @@ public:
       Sections.push_back(&VerSym);
     if (WriteVerDef)
       Sections.push_back(&VerDef);
+    if (WriteVerNeed)
+      Sections.push_back(&VerNeed);
     Sections.push_back(&DynTab);
     Sections.push_back(&ShStrTab);
     const OutputSection<ELFT> *LastSection = Sections.back();
@@ -329,8 +399,9 @@ public:
     }
     DynSym.Size = DynSym.Content.getSize();
 
-    std::map<std::string, size_t> VerDefMap;
+    std::map<std::tuple<std::string, std::string>, size_t> VerDefMap;
     size_t Vdndx = 0;
+    size_t Vnndx = 0;
 
     // Populate symbol version definition table.
     if (WriteVerDef) {
@@ -346,16 +417,33 @@ public:
       for (const std::string &Parent : Parents) {
         VerDef.Content.addAux(Vdndx, DynStr.Content.getOffset(Parent));
       }
-      VerDefMap.insert({Name, Vdndx});
+      VerDefMap.insert({{Name, ""}, Vdndx});
     }
     VerDef.Content.finalize();
     VerDef.Size = VerDef.Content.getSize();
+
+    // Populate symbol version requirement table.
+    if (!WriteVerDef && WriteVerNeed)
+      Vdndx++; // VER_NDX_GLOBAL
+    for (const auto &[File, Names] : Stub.VersionRequirements) {
+      VerNeed.Content.addFile(Names.size(), DynStr.Content.getOffset(File));
+      for (const std::string &Name : Names) {
+        Vdndx++;
+        VerNeed.Content.addAux(Vnndx, hashSysV(Name), Vdndx,
+                               DynStr.Content.getOffset(Name));
+        VerDefMap.insert({{Name, File}, Vdndx});
+      }
+      Vnndx++;
+    }
+    VerNeed.Content.finalize();
+    VerNeed.Size = VerNeed.Content.getSize();
 
     // Populate dynamic symbol version table.
     for (const IFSSymbol &Sym : Stub.Symbols)
       if (Sym.Version.empty())
         VerSym.Content.add(VER_NDX_GLOBAL);
-      else if (size_t Vdndx = VerDefMap[Sym.Version])
+      else if (size_t Vdndx = VerDefMap[{Sym.Version,
+                                         Sym.Undefined ? Sym.VersionFrom : ""}])
         VerSym.Content.add(Sym.Default ? Vdndx : (Vdndx | VERSYM_HIDDEN));
       else
         return createStringError(errc::invalid_argument,
@@ -367,6 +455,7 @@ public:
     size_t DynStrIndex = DynTab.Content.addAddr(DT_STRTAB, 0);
     size_t VerSymIndex;
     size_t VerDefIndex;
+    size_t VerNeedIndex;
     DynTab.Content.addValue(DT_STRSZ, DynSym.Size);
     for (const std::string &Lib : Stub.NeededLibs)
       DynTab.Content.addValue(DT_NEEDED, DynStr.Content.getOffset(Lib));
@@ -377,6 +466,8 @@ public:
       VerSymIndex = DynTab.Content.addAddr(DT_VERSYM, 0);
     if (WriteVerDef)
       VerDefIndex = DynTab.Content.addAddr(DT_VERDEF, 0);
+    if (WriteVerNeed)
+      VerNeedIndex = DynTab.Content.addAddr(DT_VERNEED, 0);
     DynTab.Size = DynTab.Content.getSize();
     // Calculate sections' addresses and offsets.
     uint64_t CurrentOffset = sizeof(Elf_Ehdr) + ElfPhnum * sizeof(Elf_Phdr);
@@ -392,6 +483,8 @@ public:
       DynTab.Content.modifyAddr(VerSymIndex, VerSym.Addr);
     if (WriteVerDef)
       DynTab.Content.modifyAddr(VerDefIndex, VerDef.Addr);
+    if (WriteVerNeed)
+      DynTab.Content.modifyAddr(VerNeedIndex, VerNeed.Addr);
     // Write section headers of string tables.
     fillSymTabShdr(DynSym, SHT_DYNSYM);
     fillStrTabShdr(DynStr, SHF_ALLOC);
@@ -401,6 +494,8 @@ public:
       fillVerSymShdr(VerSym);
     if (WriteVerDef)
       fillVerDefShdr(VerDef, Stub.VersionDefinitions.size() + 1);
+    if (WriteVerNeed)
+      fillVerNeedShdr(VerNeed, Stub.VersionRequirements.size());
 
     // Finish initializing the ELF header.
     initELFHeader<ELFT>(ElfHeader, static_cast<uint16_t>(*Stub.Target.Arch));
@@ -449,6 +544,8 @@ public:
       VerSym.Content.write(Data + VerSym.Shdr.sh_offset);
     if (WriteVerDef)
       VerDef.Content.write(Data + VerDef.Shdr.sh_offset);
+    if (WriteVerNeed)
+      VerNeed.Content.write(Data + VerNeed.Shdr.sh_offset);
     writeShdr(Data, DynSym);
     writeShdr(Data, DynStr);
     writeShdr(Data, DynTab);
@@ -457,6 +554,8 @@ public:
       writeShdr(Data, VerSym);
     if (WriteVerDef)
       writeShdr(Data, VerDef);
+    if (WriteVerNeed)
+      writeShdr(Data, VerNeed);
   }
 
 private:
@@ -469,8 +568,10 @@ private:
   ContentSection<ELFDynamicTableBuilder<ELFT>, ELFT> DynTab;
   ContentSection<ELFVersionSymbolBuilder<ELFT>, ELFT> VerSym;
   ContentSection<ELFVersionDefinitionBuilder<ELFT>, ELFT> VerDef;
+  ContentSection<ELFVersionRequirementBuilder<ELFT>, ELFT> VerNeed;
   bool WriteVerSym = false;
   bool WriteVerDef = false;
+  bool WriteVerNeed = false;
 
   template <class T> static void write(uint8_t *Data, const T &Value) {
     *reinterpret_cast<T *>(Data) = Value;
@@ -550,6 +651,21 @@ private:
     VerDef.Shdr.sh_link = this->DynStr.Index;
   }
 
+  void fillVerNeedShdr(
+      ContentSection<ELFVersionRequirementBuilder<ELFT>, ELFT> &VerNeed,
+      size_t Size) const {
+    VerNeed.Shdr.sh_type = SHT_GNU_verneed;
+    VerNeed.Shdr.sh_flags = SHF_ALLOC;
+    VerNeed.Shdr.sh_addr = VerNeed.Addr;
+    VerNeed.Shdr.sh_offset = VerNeed.Offset;
+    VerNeed.Shdr.sh_info = Size;
+    VerNeed.Shdr.sh_size = VerNeed.Size;
+    VerNeed.Shdr.sh_name = this->ShStrTab.Content.getOffset(VerNeed.Name);
+    VerNeed.Shdr.sh_addralign = VerNeed.Align;
+    VerNeed.Shdr.sh_entsize = sizeof(Elf_Dyn);
+    VerNeed.Shdr.sh_link = this->DynStr.Index;
+  }
+
   uint64_t shdrOffset(const OutputSection<ELFT> &Sec) const {
     return ElfHeader.e_shoff + Sec.Index * sizeof(Elf_Shdr);
   }
@@ -597,6 +713,8 @@ public:
   const Elf_Shdr *getVerSym() { return findHdr(SHT_GNU_versym); }
 
   const Elf_Shdr *getVerDef() { return findHdr(SHT_GNU_verdef); }
+
+  const Elf_Shdr *getVerNeed() { return findHdr(SHT_GNU_verneed); }
 
   Expected<StringRef> getDynStr() {
     if (DynSymHdr)
@@ -715,6 +833,12 @@ static Error populateDynamic(DynamicEntries &Dyn,
     case DT_VERDEFNUM:
       Dyn.VerDefNum = Entry.d_un.d_val;
       break;
+    case DT_VERNEED:
+      Dyn.VerNeed = Entry.d_un.d_ptr;
+      break;
+    case DT_VERNEEDNUM:
+      Dyn.VerNeedNum = Entry.d_un.d_val;
+      break;
     }
   }
 
@@ -756,8 +880,9 @@ static Error populateDynamic(DynamicEntries &Dyn,
 /// @param Default Whether the IFSSymbol is a default version symbol.
 /// @param RawSym ELFT::Sym to extract symbol information from.
 template <class ELFT>
-static IFSSymbol createELFSym(StringRef SymName, StringRef SymVer, bool Default,
-                              const typename ELFT::Sym &RawSym) {
+static IFSSymbol createELFSym(StringRef SymName,
+                              std::tuple<std::string, std::string> SymVer,
+                              bool Default, const typename ELFT::Sym &RawSym) {
   IFSSymbol TargetSym{SymName.str()};
   uint8_t Binding = RawSym.getBinding();
   if (Binding == STB_WEAK)
@@ -765,7 +890,7 @@ static IFSSymbol createELFSym(StringRef SymName, StringRef SymVer, bool Default,
   else
     TargetSym.Weak = false;
 
-  TargetSym.Version = SymVer;
+  std::tie(TargetSym.Version, TargetSym.VersionFrom) = SymVer;
 
   TargetSym.Default = Default;
   TargetSym.Undefined = RawSym.isUndefined();
@@ -839,13 +964,14 @@ buildStub(const ELFObjectFile<ELFT> &ElfObj) {
     DestStub->NeededLibs.push_back(std::string(*LibNameOrErr));
   }
 
-  std::vector<std::string> Versions;
+  std::vector<std::tuple<std::string, std::string>> Versions;
   Versions.push_back({}); // VER_NDX_LOCAL
   Versions.push_back({}); // VER_NDX_GLOBAL
-  auto InsertVersion = [&Versions](size_t N, const std::string Version) {
+  auto InsertVersion = [&Versions](size_t N, const std::string Version,
+                                   const std::string File) {
     if (N >= Versions.size())
       Versions.resize(N + 1);
-    Versions[N] = Version.c_str();
+    Versions[N] = {Version.c_str(), File.c_str()};
   };
 
   if (const Elf_Shdr *VerDefPtr = EDynSym->getVerDef()) {
@@ -855,11 +981,30 @@ buildStub(const ELFObjectFile<ELFT> &ElfObj) {
       return appendToError(VerDefOrError.takeError(),
                            "when reading dynamic symbol version definitions");
     for (const VerDef &VerDef : *VerDefOrError) {
-      InsertVersion(VerDef.Ndx & VERSYM_VERSION, VerDef.Name);
+      InsertVersion(VerDef.Ndx & VERSYM_VERSION, VerDef.Name, "");
       std::vector<std::string> Parents;
       for (const VerdAux &VerDAux : VerDef.AuxV)
         Parents.push_back(VerDAux.Name);
       DestStub->VersionDefinitions.push_back({VerDef.Name, std::move(Parents)});
+    }
+  }
+
+  size_t VerDefCount = Versions.size();
+
+  if (const Elf_Shdr *VerNeedPtr = EDynSym->getVerNeed()) {
+    Expected<std::vector<VerNeed>> VerNeedOrError =
+        ElfFile.getVersionDependencies(*VerNeedPtr);
+    if (!VerNeedOrError)
+      return appendToError(VerNeedOrError.takeError(),
+                           "when reading dynamic symbol version requirements");
+    for (const VerNeed &VerNeed : *VerNeedOrError) {
+      std::vector<std::string> Names;
+      for (const VernAux &VerNAux : VerNeed.AuxV) {
+        std::string Name = VerNAux.Name.c_str();
+        InsertVersion(VerNAux.Other & ELF::VERSYM_VERSION, Name, VerNeed.File);
+        Names.push_back(Name);
+      }
+      DestStub->VersionRequirements.push_back({VerNeed.File, std::move(Names)});
     }
   }
 
@@ -895,7 +1040,7 @@ buildStub(const ELFObjectFile<ELFT> &ElfObj) {
       return appendToError(SymName.takeError(), "when reading dynamic symbols");
 
     bool Default = false;
-    std::string Version;
+    std::tuple<std::string, std::string> Version;
     if (const Elf_Shdr *VerSymPtr = EDynSym->getVerSym()) {
       using Elf_VerSym = typename ELFT::Versym;
       Expected<const Elf_VerSym *> VerEntryOrErr =
@@ -906,9 +1051,9 @@ buildStub(const ELFObjectFile<ELFT> &ElfObj) {
       uint16_t VSIndex = (*VerEntryOrErr)->vs_index;
       size_t VersionIndex = VSIndex & VERSYM_VERSION;
       if (VersionIndex > VER_NDX_GLOBAL && VersionIndex < Versions.size()) {
-        Default = !(VSIndex & VERSYM_HIDDEN);
+        Default = !(VSIndex & VERSYM_HIDDEN) && VersionIndex < VerDefCount;
         Version = Versions[VersionIndex];
-        if (Version.empty())
+        if (Version == std::tie("", ""))
           return createError(
               "SHT_GNU_versym section refers to a version index " +
               Twine(VersionIndex) + " which is missing");
